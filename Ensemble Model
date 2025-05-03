@@ -1,0 +1,133 @@
+from zipfile import ZipFile
+with ZipFile("/content/TB_Dataset.zip",'r') as zipobj:
+  zipobj.extractall()
+pip install Augmentor
+import Augmentor
+p = Augmentor.Pipeline("/content/dataset/Dataset",output_directory='/content/dataset/Dataset')
+p.rotate(probability=0.7,max_left_rotation=10,max_right_rotation=10)
+p.zoom(probability=0.3,min_factor = 1.1,max_factor = 1.6)
+p.sample(2000)
+import pathlib
+import tensorflow as tf
+
+data_dir = pathlib.Path("/content/dataset/Dataset")
+img_height = 224
+img_width = 224
+train_ds = tf.keras.utils.image_dataset_from_directory(
+    data_dir,
+    validation_split = 0.4,
+    subset = "training",
+    seed = 123,
+    image_size = (img_height,img_width),
+    batch_size = 32)
+val_ds = tf.keras.utils.image_dataset_from_directory(
+    data_dir,
+    validation_split = 0.2,
+    subset = "validation",
+    seed = 123,
+    image_size = (img_height,img_width),
+    batch_size = 32)
+normalization_layer = tf.keras.layers.Rescaling(1./255)
+import numpy as np
+normalized_ds = train_ds.map(lambda x,y:(normalization_layer(x),y))
+image_batch, labels_batch = next(iter(normalized_ds))
+first_image = image_batch[0]
+print(np.min(first_image),np.max(first_image))
+AUTOTUNE = tf.data.AUTOTUNE
+train_ds = train_ds.cache().shuffle(10).prefetch(buffer_size = AUTOTUNE)
+val_ds = val_ds.cache().prefetch(buffer_size = AUTOTUNE)
+from tensorflow.keras.applications import InceptionV3
+from tensorflow.keras.models import Model
+from keras.layers import GlobalAveragePooling2D,Flatten,BatchNormalization,Dense, Dropout
+from tensorflow.keras.layers import MaxPooling2D, GlobalAveragePooling2D
+base_model = InceptionV3(
+    input_shape = (224,224,3),
+    weights = 'imagenet',
+    include_top = False)
+
+#Freeze the first 10 Layers
+for layer in base_model.layers[:10]:
+  layer.trainable = False
+x = base_model.output
+x = GlobalAveragePooling2D()(x)
+x = Dense(512,activation = 'relu')(x)
+x = Dropout(0.4)(x)
+predictions = Dense(2,activation = 'softmax')(x)
+model1 = Model(inputs = base_model.inputs,outputs = predictions)
+print("done")
+from tensorflow.keras.applications import VGG16
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import MaxPooling2D, GlobalAveragePooling2D
+base_model =  VGG16(
+    input_shape = (224,224,3),
+    weights = 'imagenet',
+    include_top = False)
+
+#Freeze the first 10 Layers
+for layer in base_model.layers[:10]:
+  layer.trainable = False
+x = base_model.output
+x = GlobalAveragePooling2D()(x)
+x = Dense(512,activation = 'relu')(x)
+x = Dropout(0.4)(x)
+predictions = Dense(2,activation = 'softmax')(x)
+model2 = Model(inputs = base_model.inputs,outputs = predictions)
+print("done")
+from tensorflow.keras.callbacks import ModelCheckpoint
+
+model_filepath = "/content/drive/My Drive/model-{epoch:02d}-{val_accuracy:.4f}.keras"
+
+checkpoint = ModelCheckpoint(
+    filepath=model_filepath,
+    monitor='val_accuracy',
+    save_best_only=True,
+    save_weights_only=False,
+    mode='max',
+    verbose=1
+)
+model1.compile(optimizer='adam',loss = tf.losses.SparseCategoricalCrossentropy(from_logits=False),metrics=['accuracy'])
+model2.compile(optimizer='adam',loss = tf.losses.SparseCategoricalCrossentropy(from_logits=False),metrics=['accuracy'])
+history1 = model1.fit(
+    train_ds,
+    validation_data = val_ds,
+    epochs = 5,callbacks = [checkpoint]
+)
+history1 = model1.fit(
+    train_ds,
+    validation_data = val_ds,
+    epochs = 5,callbacks = [checkpoint]
+)
+model1.save('/content/drive/My Drive/model1.keras')
+model2.save('/content/drive/My Drive/model2.keras')
+from tensorflow.keras.models import Model, load_model
+from tensorflow.keras.layers import Input, Average
+
+model_1 = load_model("/content/drive/MyDrive/model1.keras")
+model_1 = Model(inputs = model_1.inputs,
+                outputs = model_1.outputs,
+                name = 'model1')
+model_2 = load_model("/content/drive/My Drive/model2.keras")
+model_2 = Model(inputs = model_2.inputs,
+                outputs = model_2.outputs,
+                name = 'model2')
+models = [model_1,model_2]
+model_input = Input(shape = (224,224,3))
+model_outputs = [model(model_input) for model in models]
+if any(isinstance(output, list) for output in model_outputs):
+    model_outputs = [tensor for sublist in model_outputs for tensor in sublist]  # Flatten
+
+# Merge outputs using Average()
+ensemble_output = Average()(model_outputs)  # Corrected spelling
+
+# Create the ensemble model
+ensemble_model = Model(inputs=model_input, outputs=ensemble_output, name='ensemble')
+
+# Print model summary to verify structure
+ensemble_model.summary()
+ensemble_model.compile(optimizer='adam',loss = tf.losses.SparseCategoricalCrossentropy(from_logits=False),metrics=['accuracy'])
+history = ensemble_model.fit(
+    train_ds,
+    validation_data = val_ds,
+    epochs = 5,callbacks = [checkpoint]
+)
+
